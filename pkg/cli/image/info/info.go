@@ -8,6 +8,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -43,7 +44,7 @@ func NewInfo(streams genericclioptions.IOStreams) *cobra.Command {
 		Use:   "info IMAGE [...]",
 		Short: "Display information about an image",
 		Long: templates.LongDesc(`
-			Show information about an image in a remote image registry
+			Show information about an image in a remote image registry.
 
 			This command will retrieve metadata about container images in a remote image
 			registry. You may specify images by tag or digest and specify multiple at a
@@ -111,14 +112,14 @@ func (o *InfoOptions) Run() error {
 	}
 
 	// cache the context
-	context, err := o.SecurityOptions.Context()
+	registryContext, err := o.SecurityOptions.Context()
 	if err != nil {
 		return err
 	}
 	opts := &imagesource.Options{
 		FileDir:         o.FileDir,
 		Insecure:        o.SecurityOptions.Insecure,
-		RegistryContext: context,
+		RegistryContext: registryContext,
 	}
 
 	hadError := false
@@ -134,10 +135,7 @@ func (o *InfoOptions) Run() error {
 
 			var image *Image
 			retriever := &ImageRetriever{
-				FileDir: o.FileDir,
-				Image: map[string]imagesource.TypedImageReference{
-					location: src,
-				},
+				FileDir:         o.FileDir,
 				SecurityOptions: o.SecurityOptions,
 				ManifestListCallback: func(from string, list *manifestlist.DeserializedManifestList, all map[digest.Digest]distribution.Manifest) (map[digest.Digest]distribution.Manifest, error) {
 					filtered := make(map[digest.Digest]distribution.Manifest)
@@ -170,7 +168,7 @@ func (o *InfoOptions) Run() error {
 					return nil
 				},
 			}
-			if err := retriever.Run(); err != nil {
+			if _, err := retriever.Image(context.TODO(), src); err != nil {
 				return err
 			}
 
@@ -348,7 +346,6 @@ func writeTabSection(out io.Writer, fn func(w io.Writer)) {
 
 type ImageRetriever struct {
 	FileDir         string
-	Image           map[string]imagesource.TypedImageReference
 	SecurityOptions imagemanifest.SecurityOptions
 	ParallelOptions imagemanifest.ParallelOptions
 	// ImageMetadataCallback is invoked once per image retrieved, and may be called in parallel if
@@ -362,11 +359,21 @@ type ImageRetriever struct {
 	ManifestListCallback func(from string, list *manifestlist.DeserializedManifestList, all map[digest.Digest]distribution.Manifest) (map[digest.Digest]distribution.Manifest, error)
 }
 
-func (o *ImageRetriever) Run() error {
-	ctx := context.Background()
+// Image returns a single image matching ref.
+func (o *ImageRetriever) Image(ctx context.Context, ref imagesource.TypedImageReference) (*Image, error) {
+	images, err := o.Images(ctx, map[string]imagesource.TypedImageReference{"": ref})
+	if err != nil {
+		return nil, err
+	}
+	return images[""], nil
+}
+
+// Images invokes the retriever as specified and returns both the result of callbacks and a map
+// of images invoked. It takes a value receiver because it mutates the original object.
+func (o *ImageRetriever) Images(ctx context.Context, refs map[string]imagesource.TypedImageReference) (map[string]*Image, error) {
 	fromContext, err := o.SecurityOptions.Context()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fromOptions := &imagesource.Options{
 		FileDir:         o.FileDir,
@@ -374,19 +381,27 @@ func (o *ImageRetriever) Run() error {
 		RegistryContext: fromContext,
 	}
 
-	callbackFn := o.ImageMetadataCallback
-	if callbackFn == nil {
-		callbackFn = func(_ string, _ *Image, err error) error {
-			return err
+	var lock sync.Mutex
+	images := make(map[string]*Image)
+	callbackFn := func(name string, image *Image, err error) error {
+		if o.ImageMetadataCallback != nil {
+			if err := o.ImageMetadataCallback(name, image, err); err != nil {
+				return err
+			}
 		}
+		lock.Lock()
+		defer lock.Unlock()
+		images[name] = image
+		return err
 	}
+
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	q := workqueue.New(o.ParallelOptions.MaxPerRegistry, stopCh)
-	return q.Try(func(q workqueue.Try) {
-		for key := range o.Image {
+	return images, q.Try(func(q workqueue.Try) {
+		for key := range refs {
 			name := key
-			from := o.Image[key]
+			from := refs[key]
 			q.Try(func() error {
 				repo, err := fromOptions.Repository(ctx, from)
 				if err != nil {
@@ -400,7 +415,7 @@ func (o *ImageRetriever) Run() error {
 						return callbackFn(name, nil, imagemanifest.NewImageForbidden(msg, err))
 					}
 					if imagemanifest.IsImageNotFound(err) {
-						msg := fmt.Sprintf("image %q does not exist", from)
+						msg := fmt.Sprintf("image %q not found: %s", from, err.Error())
 						return callbackFn(name, nil, imagemanifest.NewImageNotFound(msg, err))
 					}
 					return callbackFn(name, nil, fmt.Errorf("unable to read image %s: %v", from, err))

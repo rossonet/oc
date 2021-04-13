@@ -64,10 +64,10 @@ const RoutePollTimeout = 5 * time.Second
 
 var (
 	newAppLong = templates.LongDesc(`
-		Create a new application by specifying source code, templates, and/or images
+		Create a new application by specifying source code, templates, and/or images.
 
 		This command will try to build up the components of an application using images, templates,
-		or code that has a public repository. It will lookup the images on the local Docker installation
+		or code that has a public repository. It will look up the images on the local Docker installation
 		(if available), a container image registry, an integrated image stream, or stored templates.
 
 		If you specify a source code URL, it will set up a build that takes your source code and converts
@@ -85,7 +85,7 @@ var (
 		oc new-app --list
 
 		# Create an application based on the source code in the current git repository (with a public remote) and a Docker image
-		oc new-app . --docker-image=repo/langimage
+		oc new-app . --docker-image=registry/repo/langimage
 
 		# Create an application myapp with Docker based build strategy expecting binary input
 		oc new-app  --strategy=docker --binary --name myapp
@@ -121,7 +121,7 @@ var (
 		# can be used to filter search results)
 		oc new-app --search --template=ruby
 
-		# Search for "ruby" in stored templates and print the output as an YAML
+		# Search for "ruby" in stored templates and print the output as YAML
 		oc new-app --search --template=ruby --output=yaml
 	`)
 
@@ -134,9 +134,14 @@ To list all local templates and image streams, use:
 To search templates, image streams, and Docker images that match the arguments provided, use:
 
   oc new-app -S php
-  oc new-app -S --template=ruby
+  oc new-app -S --template=rails
   oc new-app -S --image-stream=mysql
-  oc new-app -S --docker-image=python
+  oc new-app -S --docker-image=registry.access.redhat.com/ubi8/python-38
+
+For details on how to use the results from those searches to provide images, image streams, templates, or source code locations as inputs into 'oc new-app', use:
+
+  oc help new-app
+
 `
 )
 
@@ -264,7 +269,7 @@ func NewCmdNewApplication(f kcmdutil.Factory, streams genericclioptions.IOStream
 	cmd.Flags().StringSliceVar(&o.Config.SourceRepositories, "code", o.Config.SourceRepositories, "Source code to use to build this application.")
 	cmd.Flags().StringVar(&o.Config.ContextDir, "context-dir", o.Config.ContextDir, "Context directory to be used for the build.")
 	cmd.Flags().StringSliceVarP(&o.Config.ImageStreams, "image-stream", "i", o.Config.ImageStreams, "Name of an image stream to use in the app.")
-	cmd.Flags().StringSliceVar(&o.Config.DockerImages, "docker-image", o.Config.DockerImages, "Name of a Docker image to include in the app.")
+	cmd.Flags().StringSliceVar(&o.Config.DockerImages, "docker-image", o.Config.DockerImages, "Name of a Docker image to include in the app.  Note:  not specifying a registry or repository means defaults in place for client image pulls are employed.")
 	cmd.Flags().StringSliceVar(&o.Config.Templates, "template", o.Config.Templates, "Name of a stored template to use in the app.")
 	cmd.Flags().StringSliceVarP(&o.Config.TemplateFiles, "file", "f", o.Config.TemplateFiles, "Path to a template file to use for the app.")
 	cmd.MarkFlagFilename("file", "yaml", "yml", "json")

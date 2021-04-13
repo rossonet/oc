@@ -37,15 +37,15 @@ var (
 	with the identity (pull spec) of the given image.
 	By default, this command will use the public GPG keyring located in "$GNUPGHOME/.gnupg/pubring.gpg"
 
-	By default, this command will not save the result of the verification back to the image object, to do so
-	user have to specify the "--save" flag. Note that to modify the image signature verification status,
-	user have to have permissions to edit an image object (usually an "image-auditor" role).
+	By default, this command will not save the result of the verification back to the image object; to do so
+	the user must specify the "--save" flag. Note that to modify the image signature verification status,
+	the user must have permissions to edit an image object (usually an "image-auditor" role).
 
 	Note that using the "--save" flag on already verified image together with invalid GPG
 	key or invalid expected identity will cause the saved verification status to be removed
 	and the image will become "unverified".
 
-	If this command is outside the cluster, users have to specify the "--registry-url" parameter
+	If this command is outside the cluster, users must specify the "--registry-url" parameter
 	with the public URL of image registry.
 
 	To remove all verifications, users can use the "--remove-all" flag.
@@ -261,7 +261,9 @@ func (o *VerifyImageSignatureOptions) getImageManifest(img *imagev1.Image) ([]by
 			registryURL.Scheme = ""
 		}
 	}
-	return getImageManifestByIDFromRegistry(registryURL, parsed.RepositoryName(), img.Name, o.CurrentUser, o.CurrentUserToken, o.Insecure)
+	// when using in-cluster auth, the username is just user + token, compare
+	// https://github.com/openshift/oc/blob/9f54c1d4f68c8530ac9466c655a4e55eb04a1459/pkg/cli/registry/login/login.go#L208
+	return getImageManifestByIDFromRegistry(registryURL, parsed.RepositoryName(), img.Name, "user", o.CurrentUserToken, o.Insecure)
 }
 
 // verifySignature takes policy, image and the image signature blob and verifies that the

@@ -34,7 +34,7 @@ import (
 
 var (
 	desc = templates.LongDesc(`
-		Login to the OpenShift integrated registry.
+		Log in to the OpenShift integrated registry.
 
 		This logs your local Docker client into the OpenShift integrated registry using the
 		external registry name (if configured by your administrator). You may also log in
@@ -53,7 +53,12 @@ var (
 		the current namespace or the openshift namespace and use the status fields that
 		indicate the registry hostnames. If no image stream is found or if you do not have
 		permission to view image streams you will have to pass the --registry flag with the
-		desired hostname.
+		desired host name.
+
+		You may also pass the --registry flag to login to the integrated registry but with a
+		custom DNS name, or to an external registry. Note that in absence of --auth-basic=USER:PASSWORD,
+		the authentication token from the connected kubeconfig file will be recorded as the auth entry
+		in the credentials file (defaults to Docker config.json) for the passed registry value.
 
 		Experimental: This command is under active development and may change without notice.`)
 
@@ -64,8 +69,8 @@ var (
 		# Log in as the default service account in the current namespace
 		oc registry login -z default
 
-		# Log in to a different registry using BASIC auth credentials
-		oc registry login --registry quay.io --auth-basic=USER:PASS
+		# Log in to different registry using BASIC auth credentials
+		oc registry login --registry quay.io/myregistry --auth-basic=USER:PASS
 	`)
 )
 
@@ -113,7 +118,7 @@ func NewRegistryLoginCmd(f kcmdutil.Factory, streams genericclioptions.IOStreams
 
 	cmd := &cobra.Command{
 		Use:     "login ",
-		Short:   "Login to the integrated registry",
+		Short:   "Log in to the integrated registry",
 		Long:    desc,
 		Example: example,
 		Run: func(c *cobra.Command, args []string) {
@@ -125,8 +130,8 @@ func NewRegistryLoginCmd(f kcmdutil.Factory, streams genericclioptions.IOStreams
 
 	flag := cmd.Flags()
 	flag.StringVar(&o.AuthBasic, "auth-basic", o.AuthBasic, "Provide credentials in the form 'user:password' to authenticate (advanced)")
-	flag.StringVarP(&o.ConfigFile, "registry-config", "a", o.ConfigFile, "The location of the Docker config.json your credentials will be stored in.")
-	flag.StringVar(&o.ConfigFile, "to", o.ConfigFile, "The location of the Docker config.json your credentials will be stored in.")
+	flag.StringVarP(&o.ConfigFile, "registry-config", "a", o.ConfigFile, "The location of the file your credentials will be stored in. Default is Docker config.json")
+	flag.StringVar(&o.ConfigFile, "to", o.ConfigFile, "The location of the file your credentials will be stored in. Default is Docker config.json")
 	flag.StringVarP(&o.ServiceAccount, "service-account", "z", o.ServiceAccount, "Log in as the specified service account name in the specified namespace.")
 	flag.StringVar(&o.HostPort, "registry", o.HostPort, "An alternate domain name and port to use for the registry, defaults to the cluster's configured external hostname.")
 	flag.BoolVar(&o.SkipCheck, "skip-check", o.SkipCheck, "Skip checking the credentials against the registry.")

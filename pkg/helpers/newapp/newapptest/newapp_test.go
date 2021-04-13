@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	githttp "github.com/AaronO/go-git-http"
 	"github.com/AaronO/go-git-http/auth"
@@ -46,7 +45,6 @@ import (
 	fakeroutev1client "github.com/openshift/client-go/route/clientset/versioned/fake"
 	faketemplatev1client "github.com/openshift/client-go/template/clientset/versioned/fake"
 	"github.com/openshift/library-go/pkg/git"
-	dockerregistry "github.com/openshift/library-go/pkg/image/dockerv1client"
 	newappapp "github.com/openshift/oc/pkg/cli/newapp"
 	"github.com/openshift/oc/pkg/helpers/newapp"
 	"github.com/openshift/oc/pkg/helpers/newapp/app"
@@ -153,7 +151,7 @@ func TestNewAppResolve(t *testing.T) {
 					Value: "mysql:invalid",
 					Resolver: app.UniqueExactOrInexactMatchResolver{
 						Searcher: app.DockerRegistrySearcher{
-							Client: dockerregistry.NewClient(10*time.Second, true),
+							Client: cmd.NewImageRegistrySearcher(),
 						},
 					},
 				})},
@@ -216,7 +214,7 @@ func TestNewAppDetectSource(t *testing.T) {
 	defer os.RemoveAll(gitLocalDir)
 
 	dockerSearcher := app.DockerRegistrySearcher{
-		Client: dockerregistry.NewClient(10*time.Second, true),
+		Client: cmd.NewImageRegistrySearcher(),
 	}
 	mocks := MockSourceRepositories(t, gitLocalDir)
 	tests := []struct {
@@ -331,7 +329,7 @@ func (r *ExactMatchDirectTagDockerSearcher) Search(precise bool, terms ...string
 func TestNewAppRunAll(t *testing.T) {
 	skipExternalGit(t)
 	dockerSearcher := app.DockerRegistrySearcher{
-		Client: dockerregistry.NewClient(10*time.Second, true),
+		Client: cmd.NewImageRegistrySearcher(),
 	}
 	failImageClient := fakeimagev1client.NewSimpleClientset()
 	failImageClient.AddReactor("get", "images", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
@@ -517,7 +515,7 @@ func TestNewAppRunAll(t *testing.T) {
 			},
 			checkPort: "8080",
 			expected: map[string][]string{
-				"imageStream": {"ruby-hello-world", "ruby-25-centos7"},
+				"imageStream": {"ruby-hello-world", "ruby-27-centos7"},
 				"buildConfig": {"ruby-hello-world"},
 				"deployment":  {"ruby-hello-world"},
 				"service":     {"ruby-hello-world"},
@@ -715,7 +713,7 @@ func TestNewAppRunAll(t *testing.T) {
 				Resolvers: cmd.Resolvers{
 					DockerSearcher: app.DockerClientSearcher{
 						Client: &apptest.FakeDockerClient{
-							Images: []docker.APIImages{{RepoTags: []string{"centos/ruby-25-centos7"}}},
+							Images: []docker.APIImages{{RepoTags: []string{"centos/ruby-27-centos7"}}},
 							Image:  dockerBuilderImage(),
 						},
 						Insecure:         true,
@@ -743,7 +741,7 @@ func TestNewAppRunAll(t *testing.T) {
 				OriginNamespace: "default",
 			},
 			expected: map[string][]string{
-				"imageStream": {"ruby-hello-world", "ruby-25-centos7"},
+				"imageStream": {"ruby-hello-world", "ruby-27-centos7"},
 				"buildConfig": {"ruby-hello-world"},
 				"deployment":  {"ruby-hello-world"},
 				"service":     {"ruby-hello-world"},
@@ -761,7 +759,7 @@ func TestNewAppRunAll(t *testing.T) {
 				Resolvers: cmd.Resolvers{
 					DockerSearcher: app.DockerClientSearcher{
 						Client: &apptest.FakeDockerClient{
-							Images: []docker.APIImages{{RepoTags: []string{"centos/ruby-25-centos7"}}},
+							Images: []docker.APIImages{{RepoTags: []string{"centos/ruby-27-centos7"}}},
 							Image:  dockerBuilderImage(),
 						},
 						Insecure: true,
@@ -1075,7 +1073,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 			config: &cmd.AppConfig{
 				ComponentInputs: cmd.ComponentInputs{
 					SourceRepositories: []string{"https://github.com/openshift/ruby-hello-world"},
-					DockerImages:       []string{"centos/ruby-25-centos7", "openshift/nodejs-010-centos7"},
+					DockerImages:       []string{"centos/ruby-27-centos7", "openshift/nodejs-010-centos7"},
 				},
 				GenerationInputs: cmd.GenerationInputs{
 					OutputDocker: true,
@@ -1085,7 +1083,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 				// TODO: this test used to silently ignore components that were not builders (i.e. user input)
 				//   That's bad, so the code should either error in this case or be a bit smarter.
 				"buildConfig": {"ruby-hello-world", "ruby-hello-world-1"},
-				"imageStream": {"nodejs-010-centos7", "ruby-25-centos7"},
+				"imageStream": {"nodejs-010-centos7", "ruby-27-centos7"},
 			},
 		},
 		{
@@ -1181,12 +1179,12 @@ func TestNewAppRunBuilds(t *testing.T) {
 					SourceRepositories: []string{"https://github.com/openshift/ruby-hello-world"},
 				},
 				GenerationInputs: cmd.GenerationInputs{
-					Dockerfile: "FROM centos/ruby-25-centos7\nRUN false",
+					Dockerfile: "FROM centos/ruby-27-centos7\nRUN false",
 				},
 			},
 			expected: map[string][]string{
 				"buildConfig": {"ruby-hello-world"},
-				"imageStream": {"ruby-25-centos7", "ruby-hello-world"},
+				"imageStream": {"ruby-27-centos7", "ruby-hello-world"},
 			},
 			checkResult: func(res *cmd.AppResult) error {
 				var bc *buildv1.BuildConfig
@@ -1206,7 +1204,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 				if bc.Spec.Source.Dockerfile != nil {
 					got = *bc.Spec.Source.Dockerfile
 				}
-				want := "FROM centos/ruby-25-centos7\nRUN false"
+				want := "FROM centos/ruby-27-centos7\nRUN false"
 				if got != want {
 					return fmt.Errorf("bc.Spec.Source.Dockerfile = %q; want %q", got, want)
 				}
@@ -1247,7 +1245,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 					},
 				},
 				GenerationInputs: cmd.GenerationInputs{
-					Dockerfile: "FROM centos/ruby-25-centos7\nRUN false",
+					Dockerfile: "FROM centos/ruby-27-centos7\nRUN false",
 				},
 			},
 			expectedErr: func(err error) bool {
@@ -1269,7 +1267,7 @@ func TestNewAppRunBuilds(t *testing.T) {
 			},
 			expected: map[string][]string{
 				"buildConfig": {"ruby-hello-world"},
-				"imageStream": {"mongodb-26-centos7", "ruby-25-centos7", "ruby-hello-world"},
+				"imageStream": {"mongodb-26-centos7", "ruby-27-centos7", "ruby-hello-world"},
 			},
 			checkResult: func(res *cmd.AppResult) error {
 				var bc *buildv1.BuildConfig
@@ -1582,20 +1580,20 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					OutputDocker: true,
-					To:           "centos/ruby-25-centos7",
-					Dockerfile:   "FROM centos/ruby-25-centos7:latest",
+					To:           "centos/ruby-27-centos7",
+					Dockerfile:   "FROM centos/ruby-27-centos7:latest",
 				},
 			},
 			expected: map[string][]string{
-				"buildConfig": {"ruby-25-centos7"},
-				"imageStream": {"ruby-25-centos7"},
+				"buildConfig": {"ruby-27-centos7"},
+				"imageStream": {"ruby-27-centos7"},
 			},
 			checkOutput: func(stdout, stderr io.Reader) error {
 				got, err := ioutil.ReadAll(stderr)
 				if err != nil {
 					return err
 				}
-				want := "--> WARNING: output image of \"centos/ruby-25-centos7:latest\" should be different than input\n"
+				want := "--> WARNING: output image of \"centos/ruby-27-centos7:latest\" should be different than input\n"
 				if string(got) != want {
 					return fmt.Errorf("stderr: got %q; want %q", got, want)
 				}
@@ -1630,20 +1628,20 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 			name: "successful build from dockerfile with identical input and output image references with warning(2)",
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
-					Dockerfile: "FROM centos/ruby-25-centos7\nRUN yum install -y httpd",
-					To:         "ruby-25-centos7",
+					Dockerfile: "FROM centos/ruby-27-centos7\nRUN yum install -y httpd",
+					To:         "ruby-27-centos7",
 				},
 			},
 			expected: map[string][]string{
-				"buildConfig": {"ruby-25-centos7"},
-				"imageStream": {"ruby-25-centos7"},
+				"buildConfig": {"ruby-27-centos7"},
+				"imageStream": {"ruby-27-centos7"},
 			},
 			checkOutput: func(stdout, stderr io.Reader) error {
 				got, err := ioutil.ReadAll(stderr)
 				if err != nil {
 					return err
 				}
-				want := "--> WARNING: output image of \"centos/ruby-25-centos7:latest\" should be different than input\n"
+				want := "--> WARNING: output image of \"centos/ruby-27-centos7:latest\" should be different than input\n"
 				if string(got) != want {
 					return fmt.Errorf("stderr: got %q; want %q", got, want)
 				}
@@ -1668,12 +1666,12 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 			name: "unsuccessful build from dockerfile due to identical input and output image references(2)",
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
-					Dockerfile: "FROM centos/ruby-25-centos7\nRUN yum install -y httpd",
+					Dockerfile: "FROM centos/ruby-27-centos7\nRUN yum install -y httpd",
 				},
 			},
 			expectedErr: func(err error) bool {
 				e := app.CircularOutputReferenceError{
-					Reference: "centos/ruby-25-centos7:latest",
+					Reference: "centos/ruby-27-centos7:latest",
 				}
 				return err.Error() == fmt.Errorf("%v, set a different tag with --to", e).Error()
 			},
@@ -1683,8 +1681,8 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					OutputDocker: true,
-					To:           "centos/ruby-25-centos7",
-					Dockerfile:   "FROM centos/ruby-25-centos7",
+					To:           "centos/ruby-27-centos7",
+					Dockerfile:   "FROM centos/ruby-27-centos7",
 				},
 				Resolvers: cmd.Resolvers{
 					DockerSearcher: app.DockerClientSearcher{
@@ -1695,15 +1693,15 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 				},
 			},
 			expected: map[string][]string{
-				"buildConfig": {"ruby-25-centos7"},
-				"imageStream": {"ruby-25-centos7"},
+				"buildConfig": {"ruby-27-centos7"},
+				"imageStream": {"ruby-27-centos7"},
 			},
 			checkOutput: func(stdout, stderr io.Reader) error {
 				got, err := ioutil.ReadAll(stderr)
 				if err != nil {
 					return err
 				}
-				want := "--> WARNING: output image of \"centos/ruby-25-centos7:latest\" should be different than input\n"
+				want := "--> WARNING: output image of \"centos/ruby-27-centos7:latest\" should be different than input\n"
 				if string(got) != want {
 					return fmt.Errorf("stderr: got %q; want %q", got, want)
 				}
@@ -1715,8 +1713,8 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 			config: &cmd.AppConfig{
 				GenerationInputs: cmd.GenerationInputs{
 					OutputDocker: true,
-					To:           "centos/ruby-25-centos7",
-					Dockerfile:   "FROM centos/ruby-25-centos7:latest",
+					To:           "centos/ruby-27-centos7",
+					Dockerfile:   "FROM centos/ruby-27-centos7:latest",
 				},
 				Resolvers: cmd.Resolvers{
 					DockerSearcher: app.DockerClientSearcher{
@@ -1727,15 +1725,15 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 				},
 			},
 			expected: map[string][]string{
-				"buildConfig": {"ruby-25-centos7"},
-				"imageStream": {"ruby-25-centos7"},
+				"buildConfig": {"ruby-27-centos7"},
+				"imageStream": {"ruby-27-centos7"},
 			},
 			checkOutput: func(stdout, stderr io.Reader) error {
 				got, err := ioutil.ReadAll(stderr)
 				if err != nil {
 					return err
 				}
-				want := "--> WARNING: output image of \"centos/ruby-25-centos7:latest\" should be different than input\n"
+				want := "--> WARNING: output image of \"centos/ruby-27-centos7:latest\" should be different than input\n"
 				if string(got) != want {
 					return fmt.Errorf("stderr: got %q; want %q", got, want)
 				}
@@ -1797,7 +1795,7 @@ func TestNewAppBuildOutputCycleDetection(t *testing.T) {
 func TestNewAppNewBuildEnvVars(t *testing.T) {
 	skipExternalGit(t)
 	dockerSearcher := app.DockerRegistrySearcher{
-		Client: dockerregistry.NewClient(10*time.Second, true),
+		Client: cmd.NewImageRegistrySearcher(),
 	}
 
 	okTemplateClient := faketemplatev1client.NewSimpleClientset()
@@ -1816,7 +1814,7 @@ func TestNewAppNewBuildEnvVars(t *testing.T) {
 			config: &cmd.AppConfig{
 				ComponentInputs: cmd.ComponentInputs{
 					SourceRepositories: []string{"https://github.com/openshift/ruby-hello-world"},
-					DockerImages:       []string{"centos/ruby-25-centos7", "openshift/nodejs-010-centos7"},
+					DockerImages:       []string{"centos/ruby-27-centos7", "openshift/nodejs-010-centos7"},
 				},
 				GenerationInputs: cmd.GenerationInputs{
 					OutputDocker:     true,
@@ -1872,7 +1870,7 @@ func TestNewAppNewBuildEnvVars(t *testing.T) {
 func TestNewAppBuildConfigEnvVarsAndSecrets(t *testing.T) {
 	skipExternalGit(t)
 	dockerSearcher := app.DockerRegistrySearcher{
-		Client: dockerregistry.NewClient(10*time.Second, true),
+		Client: cmd.NewImageRegistrySearcher(),
 	}
 	okTemplateClient := faketemplatev1client.NewSimpleClientset()
 	okImageClient := fakeimagev1client.NewSimpleClientset()
@@ -1892,7 +1890,7 @@ func TestNewAppBuildConfigEnvVarsAndSecrets(t *testing.T) {
 			config: &cmd.AppConfig{
 				ComponentInputs: cmd.ComponentInputs{
 					SourceRepositories: []string{"https://github.com/openshift/ruby-hello-world"},
-					DockerImages:       []string{"centos/ruby-25-centos7", "centos/mongodb-26-centos7"},
+					DockerImages:       []string{"centos/ruby-27-centos7", "centos/mongodb-26-centos7"},
 				},
 				GenerationInputs: cmd.GenerationInputs{
 					OutputDocker: true,
@@ -2327,7 +2325,7 @@ func fakeDockerSearcher() app.Searcher {
 func fakeSimpleDockerSearcher() app.Searcher {
 	return app.DockerClientSearcher{
 		Client: &apptest.FakeDockerClient{
-			Images: []docker.APIImages{{RepoTags: []string{"centos/ruby-25-centos7"}}},
+			Images: []docker.APIImages{{RepoTags: []string{"centos/ruby-27-centos7"}}},
 			Image: &docker.Image{
 				ID: "ruby",
 				Config: &docker.Config{
@@ -2374,7 +2372,7 @@ func PrepareAppConfig(config *cmd.AppConfig) (stdout, stderr *bytes.Buffer) {
 	}
 	if config.DockerSearcher == nil {
 		config.DockerSearcher = app.DockerRegistrySearcher{
-			Client: dockerregistry.NewClient(10*time.Second, true),
+			Client: cmd.NewImageRegistrySearcher(),
 		}
 	}
 	config.ImageStreamByAnnotationSearcher = fakeImageStreamSearcher()
@@ -2491,7 +2489,7 @@ func (c *NewAppFakeImageStreams) Patch(ctx context.Context, name string, pt ktyp
 	return c.proxy.Patch(ctx, name, pt, data, opts, subresources...)
 }
 
-func (c *NewAppFakeImageStreams) Secrets(ctx context.Context, imageStreamName string, opts metav1.GetOptions) (result *corev1.SecretList, err error) {
+func (c *NewAppFakeImageStreams) Secrets(ctx context.Context, imageStreamName string, opts metav1.GetOptions) (result *imagev1.SecretList, err error) {
 	return c.proxy.Secrets(ctx, imageStreamName, opts)
 }
 

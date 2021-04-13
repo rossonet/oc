@@ -14,6 +14,7 @@ import (
 	"k8s.io/kubectl/pkg/cmd/apiresources"
 	"k8s.io/kubectl/pkg/cmd/apply"
 	"k8s.io/kubectl/pkg/cmd/attach"
+	kcmdauth "k8s.io/kubectl/pkg/cmd/auth"
 	"k8s.io/kubectl/pkg/cmd/autoscale"
 	"k8s.io/kubectl/pkg/cmd/clusterinfo"
 	"k8s.io/kubectl/pkg/cmd/completion"
@@ -22,6 +23,7 @@ import (
 	kcreate "k8s.io/kubectl/pkg/cmd/create"
 	"k8s.io/kubectl/pkg/cmd/delete"
 	"k8s.io/kubectl/pkg/cmd/describe"
+	"k8s.io/kubectl/pkg/cmd/diff"
 	"k8s.io/kubectl/pkg/cmd/edit"
 	"k8s.io/kubectl/pkg/cmd/exec"
 	"k8s.io/kubectl/pkg/cmd/explain"
@@ -38,8 +40,6 @@ import (
 	kcmdutil "k8s.io/kubectl/pkg/cmd/util"
 	kwait "k8s.io/kubectl/pkg/cmd/wait"
 	"k8s.io/kubectl/pkg/util/templates"
-	kcmdauth "k8s.io/kubernetes/pkg/kubectl/cmd/auth"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/convert"
 
 	"github.com/openshift/oc/pkg/cli/create"
 	cmdutil "github.com/openshift/oc/pkg/helpers/cmd"
@@ -211,11 +211,6 @@ func NewCmdExplain(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cob
 	return cmdutil.ReplaceCommandName("kubectl", "oc", templates.Normalize(explain.NewCmdExplain("oc", f, streams)))
 }
 
-// NewCmdConvert is a wrapper for the Kubernetes cli convert command
-func NewCmdConvert(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.Command {
-	return cmdutil.ReplaceCommandName("kubectl", "oc", templates.Normalize(convert.NewCmdConvert(f, streams)))
-}
-
 // NewCmdEdit is a wrapper for the Kubernetes cli edit command
 func NewCmdEdit(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	return cmdutil.ReplaceCommandName("kubectl", "oc", templates.Normalize(edit.NewCmdEdit(f, streams)))
@@ -259,4 +254,8 @@ func NewCmdApiVersions(f kcmdutil.Factory, streams genericclioptions.IOStreams) 
 
 func NewCmdKustomize(streams genericclioptions.IOStreams) *cobra.Command {
 	return cmdutil.ReplaceCommandName("kubectl", "oc", templates.Normalize(kustomize.NewCmdKustomize(streams)))
+}
+
+func NewCmdDiff(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.Command {
+	return cmdutil.ReplaceCommandName("kubectl", "oc", templates.Normalize(diff.NewCmdDiff(f, streams)))
 }

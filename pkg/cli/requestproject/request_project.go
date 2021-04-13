@@ -15,7 +15,6 @@ import (
 	projectv1 "github.com/openshift/api/project/v1"
 	projectv1client "github.com/openshift/client-go/project/clientset/versioned/typed/project/v1"
 	ocproject "github.com/openshift/oc/pkg/cli/project"
-	cliconfig "github.com/openshift/oc/pkg/helpers/kubeconfig"
 )
 
 // RequestProjectOptions contains all the options for running the RequestProject cli command.
@@ -37,7 +36,7 @@ type RequestProjectOptions struct {
 // RequestProject command description.
 var (
 	requestProjectLong = templates.LongDesc(`
-		Create a new project for yourself
+		Create a new project for yourself.
 
 		If your administrator allows self-service, this command will create a new project for you and assign you
 		as the project admin.
@@ -68,7 +67,7 @@ to build a new example application in Ruby. Or use kubectl to deploy a simple Ku
 
 To switch to this project and start adding applications, use:
 
-    oc project %[2]s
+    oc project %[1]s
 `
 )
 
@@ -108,7 +107,6 @@ func (o *RequestProjectOptions) Complete(f kcmdutil.Factory, cmd *cobra.Command,
 
 	if !o.SkipConfigWrite {
 		o.ProjectOptions = ocproject.NewProjectOptions(o.IOStreams)
-		o.ProjectOptions.PathOptions = cliconfig.NewPathOptions(cmd)
 		if err := o.ProjectOptions.Complete(f, cmd, []string{""}); err != nil {
 			return err
 		}

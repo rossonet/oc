@@ -63,7 +63,7 @@ func NewExtract(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.
 		Use:   "extract",
 		Short: "Extract the contents of an update payload to disk",
 		Long: templates.LongDesc(`
-			Extract the contents of a release image to disk
+			Extract the contents of a release image to disk.
 
 			Extracts the contents of an OpenShift release image to disk for inspection or
 			debugging. Update images contain manifests and metadata about the operators that
@@ -75,7 +75,7 @@ func NewExtract(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.
 			--command for either 'oc' or 'openshift-install' will extract the binaries directly.
 			You may pass a PGP private key file with --signing-key which will create an ASCII
 			armored sha256sum.txt.asc file describing the content that was extracted that is
-			signed by the key. For more advanced signing use the generated sha256sum.txt and an
+			signed by the key. For more advanced signing, use the generated sha256sum.txt and an
 			external tool like gpg.
 
 			The --credentials-requests flag filters extracted manifests to only cloud credential
@@ -337,6 +337,7 @@ func (o *ExtractOptions) Run() error {
 			if err != nil {
 				return false, errors.Wrapf(err, "error parsing %s", hdr.Name)
 			}
+			credRequestManifests := []manifest.Manifest{}
 			for _, m := range ms {
 				if m.GVK != credentialsRequestGVK {
 					continue
@@ -350,8 +351,12 @@ func (o *ExtractOptions) Run() error {
 						continue
 					}
 				}
-				o.Manifests = append(o.Manifests, m)
+				credRequestManifests = append(credRequestManifests, m)
 			}
+			if len(credRequestManifests) == 0 {
+				return true, nil
+			}
+
 			out := o.Out
 			if len(o.Directory) > 0 {
 				out, err = os.Create(filepath.Join(o.Directory, hdr.Name))
@@ -359,7 +364,7 @@ func (o *ExtractOptions) Run() error {
 					return false, errors.Wrapf(err, "error creating manifest in %s", hdr.Name)
 				}
 			}
-			for _, m := range o.Manifests {
+			for _, m := range credRequestManifests {
 				yamlBytes, err := yaml.JSONToYAML(m.Raw)
 				if err != nil {
 					return false, errors.Wrapf(err, "error serializing manifest in %s", hdr.Name)

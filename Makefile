@@ -14,8 +14,8 @@ include $(addprefix ./vendor/github.com/openshift/build-machinery-go/make/, \
 )
 
 GO_LD_EXTRAFLAGS :=-X k8s.io/component-base/version.gitMajor="1" \
-                   -X k8s.io/component-base/version.gitMinor="19" \
-                   -X k8s.io/component-base/version.gitVersion="v1.19.0" \
+                   -X k8s.io/component-base/version.gitMinor="21" \
+                   -X k8s.io/component-base/version.gitVersion="v0.21.0-beta.1" \
                    -X k8s.io/component-base/version.gitCommit="$(SOURCE_GIT_COMMIT)" \
                    -X k8s.io/component-base/version.buildDate="$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')" \
                    -X k8s.io/component-base/version.gitTreeState="clean" \
@@ -44,7 +44,7 @@ RPM_EXTRAFLAGS := \
 	--define 'dist .el7' \
 	--define 'release 1'
 
-IMAGE_REGISTRY :=registry.svc.ci.openshift.org
+IMAGE_REGISTRY :=registry.ci.openshift.org
 
 # This will call a macro called "build-image" which will generate image specific targets based on the parameters:
 # $1 - target name
@@ -69,7 +69,7 @@ oc: build
 update: update-generated-completions
 .PHONY: update
 
-verify: verify-cli-conventions verify-generated-completions verify-imports
+verify: verify-cli-conventions verify-generated-completions
 .PHONY: verify
 
 verify-cli-conventions:
@@ -84,9 +84,9 @@ verify-generated-completions: build
 	hack/verify-generated-completions.sh
 .PHONY: verify-generated-completions
 
-verify-imports:
-	hack/verify-imports.sh
-.PHONY: verify-imports
+generate-docs:
+	go run ./tools/gendocs
+.PHONY: generate-docs
 
 generate-versioninfo:
 	SOURCE_GIT_TAG=$(SOURCE_GIT_TAG) hack/generate-versioninfo.sh

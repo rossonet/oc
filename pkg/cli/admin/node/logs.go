@@ -29,7 +29,7 @@ import (
 
 var (
 	logsLong = templates.LongDesc(`
-		Display and filter node logs
+		Display and filter node logs.
 
 		This command retrieves logs for the node. The default mode is to query the
 		systemd journal on supported operating systems, which allows searching, time
@@ -46,13 +46,13 @@ var (
 
 	logsExample = templates.Examples(`
 		# Show kubelet logs from all masters
-		oc adm node-logs node-logs --role master -u kubelet
+		oc adm node-logs --role master -u kubelet
 
 		# See what logs are available in masters in /var/logs
-		oc adm node-logs node-logs --role master --path=/
+		oc adm node-logs --role master --path=/
 
 		# Display cron log file from all masters
-		oc adm node-logs node-logs --role master --path=cron
+		oc adm node-logs --role master --path=cron
 	`)
 )
 

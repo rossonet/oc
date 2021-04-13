@@ -16,17 +16,16 @@ import (
 	kappsv1beta2 "k8s.io/api/apps/v1beta2"
 	batchv1 "k8s.io/api/batch/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
-	batchv2alpha1 "k8s.io/api/batch/v2alpha1"
 	corev1 "k8s.io/api/core/v1"
 	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/cli-runtime/pkg/resource"
@@ -63,7 +62,7 @@ const (
 
 var (
 	debugLong = templates.LongDesc(`
-		Launch a command shell to debug a running application
+		Launch a command shell to debug a running application.
 
 		When debugging images and setup problems, it's useful to get an exact copy of a running
 		pod configuration and troubleshoot with a shell. Since a pod that is failing may not be
@@ -82,13 +81,17 @@ var (
 
 		You may invoke other types of objects besides pods - any controller resource that creates
 		a pod (like a deployment, build, or job), objects that can host pods (like nodes), or
-		resources that can be used to create pods (such as image stream tags).
+		resources that can be used to create pods (such as image stream tags), or simply pass
+		'--image=IMAGE' to start a simple shell session in an image with a shell program
 
 		The debug pod is deleted when the remote command completes or the user interrupts
 		the shell.
 	`)
 
 	debugExample = templates.Examples(`
+		# Start a shell session into a pod using the OpenShift tools image
+		oc debug
+
 		# Debug a currently running deployment by creating a new pod
 		oc debug deploy/test
 
@@ -107,10 +110,10 @@ var (
 		# See the pod that would be created to debug
 		oc debug mypod-9xbc -o yaml
 
-		# Debug a resource but launch the debug pod in another namespace.
+		# Debug a resource but launch the debug pod in another namespace
 		# Note: Not all resources can be debugged using --to-namespace without modification. For example,
-		# volumes and serviceaccounts are namespace-dependent. Add '-o yaml' to output the debug pod definition
-		# to disk.  If necessary, edit the definition then run 'oc debug -f -' or run without --to-namespace.
+		# volumes and service accounts are namespace-dependent. Add '-o yaml' to output the debug pod definition
+		# to disk.  If necessary, edit the definition then run 'oc debug -f -' or run without --to-namespace
 		oc debug mypod-9xbc --to-namespace testns
 	`)
 )
@@ -139,7 +142,7 @@ type DebugOptions struct {
 	AsRoot             bool
 	AsNonRoot          bool
 	AsUser             int64
-	KeepLabels         bool // TODO: evaluate selecting the right labels automatically
+	KeepLabels         bool
 	KeepAnnotations    bool
 	KeepLiveness       bool
 	KeepReadiness      bool
@@ -214,6 +217,7 @@ func NewCmdDebug(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra
 	cmd.Flags().BoolVarP(&o.DisableTTY, "no-tty", "T", o.DisableTTY, "Disable pseudo-terminal allocation")
 	cmd.Flags().StringVarP(&o.Attach.ContainerName, "container", "c", o.Attach.ContainerName, "Container name; defaults to first container")
 	cmd.Flags().BoolVar(&o.KeepAnnotations, "keep-annotations", o.KeepAnnotations, "If true, keep the original pod annotations")
+	cmd.Flags().BoolVar(&o.KeepLabels, "keep-labels", o.KeepLabels, "If true, keep the original pod labels")
 	cmd.Flags().BoolVar(&o.KeepLiveness, "keep-liveness", o.KeepLiveness, "If true, keep the original pod liveness probes")
 	cmd.Flags().BoolVar(&o.KeepInitContainers, "keep-init-containers", o.KeepInitContainers, "Run the init containers for the pod. Defaults to true.")
 	cmd.Flags().BoolVar(&o.KeepReadiness, "keep-readiness", o.KeepReadiness, "If true, keep the original pod readiness probes")
@@ -353,18 +357,58 @@ func (o DebugOptions) Validate() error {
 
 // Debug creates and runs a debugging pod.
 func (o *DebugOptions) RunDebug() error {
-	b := o.Builder().
-		WithScheme(scheme.Scheme, scheme.Scheme.PrioritizedVersionsAllGroups()...).
-		NamespaceParam(o.Namespace).DefaultNamespace().
-		SingleResourceType().
-		ResourceNames("pods", o.Resources...).
-		Flatten()
-	if len(o.FilenameOptions.Filenames) > 0 {
-		b.FilenameParam(o.ExplicitNamespace, &o.FilenameOptions)
-	}
-	infos, err := b.Do().Infos()
-	if err != nil {
-		return err
+	var infos []*resource.Info
+
+	// the simplest possible debug is an image
+	if len(o.Resources) == 0 {
+		image := o.Image
+
+		if len(image) == 0 {
+			imageStream := o.ImageStream
+			if len(imageStream) == 0 {
+				imageStream = "openshift/tools:latest"
+			}
+			imageFromStream, err := o.resolveImageStreamTagString(imageStream)
+			if err != nil {
+				return fmt.Errorf("unable to resolve a default pod image from image stream %s: %v", imageStream, err)
+			}
+			image = imageFromStream
+			klog.V(4).Infof("Defaulted image from imagestream %s: %s", imageStream, image)
+		}
+
+		infos = append(infos, &resource.Info{
+			Mapping: &meta.RESTMapping{
+				Resource:         corev1.SchemeGroupVersion.WithResource("pods"),
+				GroupVersionKind: corev1.SchemeGroupVersion.WithKind("Pod"),
+			},
+			Name: "image",
+			Object: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "image",
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "debug", Image: image},
+					},
+				},
+			},
+		})
+
+	} else {
+		b := o.Builder().
+			WithScheme(scheme.Scheme, scheme.Scheme.PrioritizedVersionsAllGroups()...).
+			NamespaceParam(o.Namespace).DefaultNamespace().
+			SingleResourceType().
+			ResourceNames("pods", o.Resources...).
+			Flatten()
+		if len(o.FilenameOptions.Filenames) > 0 {
+			b.FilenameParam(o.ExplicitNamespace, &o.FilenameOptions)
+		}
+		var err error
+		infos, err = b.Do().Infos()
+		if err != nil {
+			return err
+		}
 	}
 	if len(infos) != 1 {
 		klog.V(4).Infof("Objects: %#v", infos)
@@ -378,49 +422,11 @@ func (o *DebugOptions) RunDebug() error {
 	if err != nil {
 		klog.V(4).Infof("Unable to get exact template, but continuing with fallback: %v", err)
 	}
-	var debugNodeNS *corev1.Namespace
-	generateName := names.SimpleNameGenerator.GenerateName("openshift-debug-node-")
-	// create namespace only if debugging a node
-	if o.IsNode && len(o.ToNamespace) == 0 && !o.ExplicitNamespace {
-		if !o.Attach.Quiet {
-			fmt.Fprintf(o.ErrOut, "Creating debug namespace/%s ...\n", generateName)
-		}
-		debugNodeNS, err = o.CoreClient.Namespaces().Create(context.TODO(), &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: generateName,
-				Labels: map[string]string{
-					"openshift.io/run-level": "0",
-				},
-				Annotations: map[string]string{
-					"openshift.io/node-selector": "",
-				},
-			},
-		}, metav1.CreateOptions{})
-		if err != nil {
-			return err
-		}
-	}
-	defer func() {
-		if debugNodeNS != nil {
-			if !o.Attach.Quiet {
-				fmt.Fprintf(o.ErrOut, "Removing debug namespace/%s ...\n", generateName)
-			}
-
-			if err := o.CoreClient.Namespaces().Delete(context.TODO(), debugNodeNS.Name, metav1.DeleteOptions{}); err != nil {
-				fmt.Fprintf(o.ErrOut, "%v\n", err)
-				return
-			}
-		}
-	}()
-
 	pod := &corev1.Pod{
 		ObjectMeta: template.ObjectMeta,
 		Spec:       template.Spec,
 	}
 	ns := infos[0].Namespace
-	if debugNodeNS != nil {
-		ns = debugNodeNS.Name
-	}
 	if len(ns) == 0 {
 		ns = o.Namespace
 	}
@@ -544,14 +550,30 @@ func (o *DebugOptions) RunDebug() error {
 			return false, nil
 		}
 
+		notifyFn := func(pod *corev1.Pod, container corev1.ContainerStatus) error {
+			// TODO: instead of reporting to the user a message, accumulate a certain amount of time in
+			// the error state, then exit early
+			if o.Attach.Quiet {
+				return nil
+			}
+			if container.State.Waiting != nil {
+				switch container.State.Waiting.Reason {
+				case "CreateContainerError", "ImagePullBackOff":
+					fmt.Fprintf(o.Attach.ErrOut, "warning: Container %s is unable to start due to an error: %s\n", container.Name, container.State.Waiting.Message)
+				}
+			}
+			return nil
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), o.Timeout)
 		defer cancel()
-		containerRunningEvent, err := watchtools.UntilWithSync(ctx, lw, &corev1.Pod{}, preconditionFunc, conditions.PodContainerRunning(o.Attach.ContainerName, o.CoreClient))
+		containerRunningEvent, err := watchtools.UntilWithSync(ctx, lw, &corev1.Pod{}, preconditionFunc, conditions.PodContainerRunning(o.Attach.ContainerName, o.CoreClient, notifyFn))
 		if err == nil {
 			klog.V(4).Infof("Stopped waiting for pod: %s %#v", containerRunningEvent.Type, containerRunningEvent.Object)
 		} else {
 			klog.V(4).Infof("Stopped waiting for pod: %v", err)
 		}
+
 		switch {
 		// api didn't error right away but the pod wasn't even created
 		case kapierrors.IsNotFound(err):
@@ -1067,8 +1089,6 @@ func (o *DebugOptions) approximatePodTemplateForObject(object runtime.Object) (*
 
 	// CronJob
 	case *batchv1beta1.CronJob:
-		return setNodeName(&t.Spec.JobTemplate.Spec.Template, o.NodeName, o.NodeNameSet), nil
-	case *batchv2alpha1.CronJob:
 		return setNodeName(&t.Spec.JobTemplate.Spec.Template, o.NodeName, o.NodeNameSet), nil
 	}
 

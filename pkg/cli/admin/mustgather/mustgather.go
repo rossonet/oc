@@ -9,14 +9,21 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/openshift/oc/pkg/cli/admin/inspect"
-
 	"github.com/spf13/cobra"
+	"k8s.io/klog/v2"
 
+	configclient "github.com/openshift/client-go/config/clientset/versioned"
+	imagev1client "github.com/openshift/client-go/image/clientset/versioned/typed/image/v1"
+	"github.com/openshift/library-go/pkg/image/imageutil"
+	imagereference "github.com/openshift/library-go/pkg/image/reference"
+	"github.com/openshift/library-go/pkg/operator/resource/retry"
+	"github.com/openshift/oc/pkg/cli/admin/inspect"
+	"github.com/openshift/oc/pkg/cli/rsync"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,19 +39,11 @@ import (
 	"k8s.io/kubectl/pkg/polymorphichelpers"
 	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/kubectl/pkg/util/templates"
-
-	imagereference "github.com/openshift/library-go/pkg/image/reference"
-
-	imagev1client "github.com/openshift/client-go/image/clientset/versioned/typed/image/v1"
-	"github.com/openshift/library-go/pkg/image/imageutil"
-	"github.com/openshift/library-go/pkg/operator/resource/retry"
-
-	"github.com/openshift/oc/pkg/cli/rsync"
 )
 
 var (
 	mustGatherLong = templates.LongDesc(`
-		Launch a pod to gather debugging information
+		Launch a pod to gather debugging information.
 
 		This command will launch a pod in a temporary namespace on your cluster that gathers
 		debugging information and then downloads the gathered information.
@@ -53,22 +52,22 @@ var (
 	`)
 
 	mustGatherExample = templates.Examples(`
-		# gather information using the default plug-in image and command, writing into ./must-gather.local.<rand>
+		# Gather information using the default plug-in image and command, writing into ./must-gather.local.<rand>
 		  oc adm must-gather
 
-		# gather information with a specific local folder to copy to
+		# Gather information with a specific local folder to copy to
 		  oc adm must-gather --dest-dir=/local/directory
 
-		# gather audit information
+		# Gather audit information
 		  oc adm must-gather -- /usr/bin/gather_audit_logs
 
-		# gather information using multiple plug-in images
+		# Gather information using multiple plug-in images
 		  oc adm must-gather --image=quay.io/kubevirt/must-gather --image=quay.io/openshift/origin-must-gather
 
-		# gather information using a specific image stream plug-in
+		# Gather information using a specific image stream plug-in
 		  oc adm must-gather --image-stream=openshift/must-gather:latest
 
-		# gather information using a specific image, command, and pod-dir
+		# Gather information using a specific image, command, and pod-dir
 		  oc adm must-gather --image=my/image:tag --source-dir=/pod/directory -- myspecial-command.sh
 	`)
 )
@@ -92,7 +91,7 @@ func NewMustGatherCommand(f kcmdutil.Factory, streams genericclioptions.IOStream
 	cmd.Flags().StringSliceVar(&o.ImageStreams, "image-stream", o.ImageStreams, "Specify an image stream (namespace/name:tag) containing a must-gather plugin image to run.")
 	cmd.Flags().StringVar(&o.DestDir, "dest-dir", o.DestDir, "Set a specific directory on the local machine to write gathered data to.")
 	cmd.Flags().StringVar(&o.SourceDir, "source-dir", o.SourceDir, "Set the specific directory on the pod copy the gathered data from.")
-	cmd.Flags().Int64Var(&o.Timeout, "timeout", 600, "The length of time to gather data, in seconds. Defaults to 10 minutes.")
+	cmd.Flags().StringVar(&o.timeoutStr, "timeout", "10m", "The length of time to gather data, like 5s, 2m, or 3h, higher than zero. Defaults to 10 minutes.")
 	cmd.Flags().BoolVar(&o.Keep, "keep", o.Keep, "Do not delete temporary resources when command completes.")
 	cmd.Flags().MarkHidden("keep")
 
@@ -104,6 +103,8 @@ func NewMustGatherOptions(streams genericclioptions.IOStreams) *MustGatherOption
 		SourceDir: "/must-gather/",
 		IOStreams: streams,
 		LogOut:    newPrefixWriter(streams.Out, "[must-gather      ] OUT"),
+		RawOut:    streams.Out,
+		Timeout:   10 * time.Minute,
 	}
 }
 
@@ -116,6 +117,9 @@ func (o *MustGatherOptions) Complete(f kcmdutil.Factory, cmd *cobra.Command, arg
 	if o.Client, err = kubernetes.NewForConfig(o.Config); err != nil {
 		return err
 	}
+	if o.ConfigClient, err = configclient.NewForConfig(o.Config); err != nil {
+		return err
+	}
 	if o.ImageClient, err = imagev1client.NewForConfig(o.Config); err != nil {
 		return err
 	}
@@ -123,6 +127,21 @@ func (o *MustGatherOptions) Complete(f kcmdutil.Factory, cmd *cobra.Command, arg
 		o.Command = args[i:]
 	} else {
 		o.Command = args
+	}
+	if len(o.timeoutStr) > 0 {
+		if strings.ContainsAny(o.timeoutStr, "smh") {
+			o.Timeout, err = time.ParseDuration(o.timeoutStr)
+			if err != nil {
+				return fmt.Errorf(`invalid argument %q for "--timeout" flag: %v`, o.timeoutStr, err)
+			}
+		} else {
+			fmt.Fprint(o.ErrOut, "Flag --timeout's value in seconds has been deprecated, use duration like 5s, 2m, or 3h, instead\n")
+			i, err := strconv.ParseInt(o.timeoutStr, 0, 64)
+			if err != nil {
+				return fmt.Errorf(`invalid argument %q for "--timeout" flag: %v`, o.timeoutStr, err)
+			}
+			o.Timeout = time.Duration(i) * time.Second
+		}
 	}
 	if len(o.DestDir) == 0 {
 		o.DestDir = fmt.Sprintf("must-gather.local.%06d", rand.Int63())
@@ -203,6 +222,7 @@ type MustGatherOptions struct {
 
 	Config           *rest.Config
 	Client           kubernetes.Interface
+	ConfigClient     configclient.Interface
 	ImageClient      imagev1client.ImageV1Interface
 	RESTClientGetter genericclioptions.RESTClientGetter
 
@@ -212,7 +232,8 @@ type MustGatherOptions struct {
 	Images       []string
 	ImageStreams []string
 	Command      []string
-	Timeout      int64
+	Timeout      time.Duration
+	timeoutStr   string
 	Keep         bool
 
 	RsyncRshCmd string
@@ -220,6 +241,8 @@ type MustGatherOptions struct {
 	PrinterCreated printers.ResourcePrinter
 	PrinterDeleted printers.ResourcePrinter
 	LogOut         io.Writer
+	// RawOut is used for printing information we're looking to have copy/pasted into bugs
+	RawOut io.Writer
 }
 
 func (o *MustGatherOptions) Validate() error {
@@ -232,6 +255,21 @@ func (o *MustGatherOptions) Validate() error {
 // Run creates and runs a must-gather pod.d
 func (o *MustGatherOptions) Run() error {
 	var err error
+
+	runBackCollection := true
+	defer func() {
+		if !runBackCollection {
+			return
+		}
+		o.BackupGathering(context.TODO())
+	}()
+
+	// print at both the beginning and at the end.  This information is important enough to be in both spots.
+	o.PrintBasicClusterState(context.TODO())
+	defer func() {
+		fmt.Fprintf(o.RawOut, "\n\n")
+		o.PrintBasicClusterState(context.TODO())
+	}()
 
 	// create namespace ...
 	ns, err := o.Client.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
@@ -351,6 +389,15 @@ func (o *MustGatherOptions) Run() error {
 	for i := range errCh {
 		errs = append(errs, i)
 	}
+	if len(errs) == 0 {
+		// If we didn't have an error during collection, then we don't need to do our backup collection.
+		runBackCollection = false
+
+	} else if len(o.Command) > 0 {
+		// If we had errors, but the user specified a command, he probably just typoed the command.
+		// If the command was specified, don't run the backup collection.
+		runBackCollection = false
+	}
 
 	// now gather all the events into a single file and produce a unified file
 	if err := inspect.CreateEventFilterPage(o.DestDir); err != nil {
@@ -394,27 +441,52 @@ func (o *MustGatherOptions) copyFilesFromPod(pod *corev1.Pod) error {
 		Destination:   &rsync.PathSpec{PodName: "", Path: destDir},
 		Client:        o.Client,
 		Config:        o.Config,
+		Compress:      true,
 		RshCmd:        fmt.Sprintf("%s --namespace=%s -c copy", o.RsyncRshCmd, pod.Namespace),
 		IOStreams:     streams,
 	}
 	rsyncOptions.Strategy = rsync.NewDefaultCopyStrategy(rsyncOptions)
-	return rsyncOptions.RunRsync()
+	err := rsyncOptions.RunRsync()
+	if err != nil {
+		klog.V(4).Infof("re-trying rsync after initial failure %v", err)
+		// re-try copying data before letting it go
+		err = rsyncOptions.RunRsync()
+	}
+	return err
 }
 
 func (o *MustGatherOptions) getGatherContainerLogs(pod *corev1.Pod) error {
-	return (&logs.LogsOptions{
+	since2s := int64(2)
+	opts := &logs.LogsOptions{
 		Namespace:   pod.Namespace,
 		ResourceArg: pod.Name,
 		Options: &corev1.PodLogOptions{
-			Follow:    true,
-			Container: pod.Spec.Containers[0].Name,
+			Follow:     true,
+			Container:  pod.Spec.Containers[0].Name,
+			Timestamps: true,
 		},
 		RESTClientGetter: o.RESTClientGetter,
 		Object:           pod,
 		ConsumeRequestFn: logs.DefaultConsumeRequest,
 		LogsForObject:    polymorphichelpers.LogsForObjectFn,
 		IOStreams:        genericclioptions.IOStreams{Out: newPrefixWriter(o.Out, fmt.Sprintf("[%s] POD", pod.Name))},
-	}).RunLogs()
+	}
+
+	for {
+		// gather script might take longer than the default API server time,
+		// so we should check if the gather script still runs and re-run logs
+		// thus we run this in a loop
+		if err := opts.RunLogs(); err != nil {
+			return err
+		}
+
+		// to ensure we don't print all of history set since to past 2 seconds
+		opts.Options.(*corev1.PodLogOptions).SinceSeconds = &since2s
+		if done, _ := o.isGatherDone(pod); done {
+			return nil
+		}
+		klog.V(4).Infof("lost logs, re-trying...")
+	}
 }
 
 func newPrefixWriter(out io.Writer, prefix string) io.Writer {
@@ -429,44 +501,44 @@ func newPrefixWriter(out io.Writer, prefix string) io.Writer {
 }
 
 func (o *MustGatherOptions) waitForGatherToComplete(pod *corev1.Pod) error {
-	err := wait.PollImmediate(10*time.Second, time.Duration(o.Timeout)*time.Second, func() (bool, error) {
-		var err error
-		if pod, err = o.Client.CoreV1().Pods(pod.Namespace).Get(context.TODO(), pod.Name, metav1.GetOptions{}); err != nil {
-			// at this stage pod should exist, we've been gathering container logs, so error if not found
-			if kerrors.IsNotFound(err) {
-				return true, err
-			}
-			return false, nil
-		}
-		var state *corev1.ContainerState
-		for _, cstate := range pod.Status.ContainerStatuses {
-			if cstate.Name == "gather" {
-				state = &cstate.State
-				break
-			}
-		}
+	return wait.PollImmediate(10*time.Second, o.Timeout, func() (bool, error) {
+		return o.isGatherDone(pod)
+	})
+}
 
-		// missing status for gather container => timeout in the worst case
-		if state == nil {
-			return false, nil
-		}
-
-		if state.Terminated != nil {
-			if state.Terminated.ExitCode == 0 {
-				return true, nil
-			}
-			return true, fmt.Errorf("%s/%s unexpectedly terminated: exit code: %v, reason: %s, message: %s", pod.Namespace, pod.Name, state.Terminated.ExitCode, state.Terminated.Reason, state.Terminated.Message)
+func (o *MustGatherOptions) isGatherDone(pod *corev1.Pod) (bool, error) {
+	var err error
+	if pod, err = o.Client.CoreV1().Pods(pod.Namespace).Get(context.TODO(), pod.Name, metav1.GetOptions{}); err != nil {
+		// at this stage pod should exist, we've been gathering container logs, so error if not found
+		if kerrors.IsNotFound(err) {
+			return true, err
 		}
 		return false, nil
-	})
-	if err != nil {
-		return err
 	}
-	return nil
+	var state *corev1.ContainerState
+	for _, cstate := range pod.Status.ContainerStatuses {
+		if cstate.Name == "gather" {
+			state = &cstate.State
+			break
+		}
+	}
+
+	// missing status for gather container => timeout in the worst case
+	if state == nil {
+		return false, nil
+	}
+
+	if state.Terminated != nil {
+		if state.Terminated.ExitCode == 0 {
+			return true, nil
+		}
+		return true, fmt.Errorf("%s/%s unexpectedly terminated: exit code: %v, reason: %s, message: %s", pod.Namespace, pod.Name, state.Terminated.ExitCode, state.Terminated.Reason, state.Terminated.Message)
+	}
+	return false, nil
 }
 
 func (o *MustGatherOptions) waitForGatherContainerRunning(pod *corev1.Pod) error {
-	return wait.PollImmediate(10*time.Second, time.Duration(o.Timeout)*time.Second, func() (bool, error) {
+	return wait.PollImmediate(10*time.Second, o.Timeout, func() (bool, error) {
 		var err error
 		if pod, err = o.Client.CoreV1().Pods(pod.Namespace).Get(context.TODO(), pod.Name, metav1.GetOptions{}); err == nil {
 			if len(pod.Status.ContainerStatuses) == 0 {
@@ -588,4 +660,24 @@ func (o *MustGatherOptions) newPod(node, image string) *corev1.Pod {
 	}
 
 	return ret
+}
+
+// BackupGathering is called if the full must-gather has an error.  This is useful for making sure we get *something*
+// no matter what has failed.  It should be focused on universal openshift failures.
+func (o *MustGatherOptions) BackupGathering(ctx context.Context) {
+	inspectOptions := inspect.NewInspectOptions(o.IOStreams)
+	inspectOptions.RESTConfig = rest.CopyConfig(o.Config)
+	inspectOptions.DestDir = o.DestDir
+	if err := inspectOptions.Complete([]string{"clusteroperators.v1.config.openshift.io"}); err != nil {
+		fmt.Fprintf(o.ErrOut, "error completing backup collection: %v", err)
+		return
+	}
+	if err := inspectOptions.Validate(); err != nil {
+		fmt.Fprintf(o.ErrOut, "error validating backup collection: %v", err)
+		return
+	}
+	if err := inspectOptions.Run(); err != nil {
+		fmt.Fprintf(o.ErrOut, "error running backup collection: %v", err)
+		return
+	}
 }

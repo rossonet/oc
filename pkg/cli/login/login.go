@@ -17,13 +17,12 @@ import (
 	"k8s.io/kubectl/pkg/util/term"
 
 	"github.com/openshift/oc/pkg/helpers/flagtypes"
-	kubeconfiglib "github.com/openshift/oc/pkg/helpers/kubeconfig"
 	"github.com/openshift/oc/pkg/helpers/tokencmd"
 )
 
 var (
 	loginLong = templates.LongDesc(`
-		Log in to your server and save login for subsequent use
+		Log in to your server and save login for subsequent use.
 
 		First-time users of the client should run this command to connect to a server,
 		establish an authenticated session, and save connection to the configuration file. The
@@ -37,7 +36,7 @@ var (
 
 	loginExample = templates.Examples(`
 		# Log in interactively
-		oc login
+		oc login --username=myuser
 
 		# Log in to the given server with the given certificate authority file
 		oc login localhost:8443 --certificate-authority=/path/to/cert.crt
@@ -81,8 +80,8 @@ func NewCmdLogin(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra
 	}
 
 	// Login is the only command that can negotiate a session token against the auth server using basic auth
-	cmds.Flags().StringVarP(&o.Username, "username", "u", o.Username, "Username, will prompt if not provided")
-	cmds.Flags().StringVarP(&o.Password, "password", "p", o.Password, "Password, will prompt if not provided")
+	cmds.Flags().StringVarP(&o.Username, "username", "u", o.Username, "Username for server")
+	cmds.Flags().StringVarP(&o.Password, "password", "p", o.Password, "Password for server")
 
 	return cmds
 }
@@ -140,7 +139,9 @@ func (o *LoginOptions) Complete(f kcmdutil.Factory, cmd *cobra.Command, args []s
 
 	o.DefaultNamespace, _, _ = f.ToRawKubeConfigLoader().Namespace()
 
-	o.PathOptions = kubeconfiglib.NewPathOptions(cmd)
+	o.PathOptions = kclientcmd.NewDefaultPathOptions()
+	// we need to set explicit path if one was specified, since NewDefaultPathOptions doesn't do it for us
+	o.PathOptions.LoadingRules.ExplicitPath = kcmdutil.GetFlagString(cmd, kclientcmd.RecommendedConfigPathFlag)
 
 	return nil
 }

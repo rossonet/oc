@@ -58,8 +58,13 @@ const configFilesBaseDir = "config"
 // signature file name.
 const maxDigestHashLen = 16
 
-// signatureFileNameFmt defines format of the release image signature file name
+// signatureFileNameFmt defines format of the release image signature file name.
 const signatureFileNameFmt = "signature-%s-%s.yaml"
+
+// archMap maps Go architecture strings to OpenShift supported values for any that differ.
+var archMap = map[string]string{
+	"amd64": "x86_64",
+}
 
 // NewMirrorOptions creates the options for mirroring a release.
 func NewMirrorOptions(streams genericclioptions.IOStreams) *MirrorOptions {
@@ -91,11 +96,11 @@ func NewMirror(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.C
 			that must be applied to a cluster to use the mirror, but you may opt to rewrite the
 			update to point to the new location and lose the cryptographic integrity of the update.
 
-			Creates a release image signature ConfigMap that can be saved to a directory, applied
+			Creates a release image signature config map that can be saved to a directory, applied
 			directly to a connected cluster, or both.
 
 			The common use for this command is to mirror a specific OpenShift release version to
-			a private registry and create a signature ConfigMap for use in a disconnected or
+			a private registry and create a signature config map for use in a disconnected or
 			offline context. The command copies all images that are part of a release into the
 			target repository and then prints the correct information to give to OpenShift to use
 			that content offline. An alternate mode is to specify --to-image-stream, which imports
@@ -106,13 +111,13 @@ func NewMirror(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.C
 			that can be used to upload the release to another registry.
 
 			You may use --apply-release-image-signature, --release-image-signature-to-dir, or both
-			to control the handling of the signature ConfigMap. Option
-			--apply-release-image-signature will apply the ConfigMap directly to a connected
+			to control the handling of the signature config map. Option
+			--apply-release-image-signature will apply the config map directly to a connected
 			cluster while --release-image-signature-to-dir specifies an export target directory. If
 			--release-image-signature-to-dir is not specified but --to-dir is,
 			--release-image-signature-to-dir defaults to a 'config' subdirectory of --to-dir.
 			The --overwrite option only applies when --apply-release-image-signature is specified
-			and indicates to update an exisiting ConfigMap if one is found. A ConfigMap written to a
+			and indicates to update an exisiting config map if one is found. A config map written to a
 			directory will always replace onethat already exists.
 		`),
 		Example: templates.Examples(`
@@ -404,6 +409,7 @@ func (o *MirrorOptions) Run() error {
 
 	var toDisk bool
 	var version string
+	var archExt string
 	if strings.Contains(dst, "${component}") {
 		format := strings.Replace(dst, "${component}", replaceComponentMarker, -1)
 		format = strings.Replace(format, "${version}", replaceVersionMarker, -1)
@@ -418,6 +424,7 @@ func (o *MirrorOptions) Run() error {
 			}
 			value := strings.Replace(dst, "${component}", name, -1)
 			value = strings.Replace(value, "${version}", version, -1)
+			value = value + archExt
 			ref, err := imagesource.ParseReference(value)
 			if err != nil {
 				klog.Fatalf("requested component %q could not be injected into %s: %v", name, dst, err)
@@ -439,9 +446,9 @@ func (o *MirrorOptions) Run() error {
 		targetFn = func(name string) imagesource.TypedImageReference {
 			copied := ref
 			if len(name) > 0 {
-				copied.Ref.Tag = fmt.Sprintf("%s-%s", version, name)
+				copied.Ref.Tag = fmt.Sprintf("%s%s-%s", version, archExt, name)
 			} else {
-				copied.Ref.Tag = version
+				copied.Ref.Tag = fmt.Sprintf("%s%s", version, archExt)
 			}
 			return copied
 		}
@@ -464,6 +471,7 @@ func (o *MirrorOptions) Run() error {
 	if is == nil {
 		o.ImageStream = &imagev1.ImageStream{}
 		is = o.ImageStream
+
 		// load image references
 		buf := &bytes.Buffer{}
 		extractOpts := NewExtractOptions(genericclioptions.IOStreams{Out: buf, ErrOut: o.ErrOut}, true)
@@ -472,6 +480,15 @@ func (o *MirrorOptions) Run() error {
 		extractOpts.ImageMetadataCallback = func(m *extract.Mapping, dgst, contentDigest digest.Digest, config *dockerv1client.DockerImageConfig) {
 			releaseDigest = contentDigest.String()
 			verifier.Verify(dgst, contentDigest)
+			if config != nil {
+				if val, ok := archMap[config.Architecture]; ok {
+					archExt = "-" + val
+				} else {
+					archExt = "-" + config.Architecture
+				}
+			} else {
+				fmt.Fprintf(o.ErrOut, "warning: Unable to retrieve image release architecture\n")
+			}
 		}
 		extractOpts.FileDir = o.FromDir
 		extractOpts.From = o.From
@@ -771,11 +788,20 @@ func (o *MirrorOptions) Run() error {
 	}
 
 	fmt.Fprintf(o.Out, "\nSuccess\nUpdate image:  %s\n", to)
+	var toList []string
 	if len(o.To) > 0 {
-		if hasPrefix {
-			fmt.Fprintf(o.Out, "Mirror prefix: %s\n", o.To)
-		} else {
-			fmt.Fprintf(o.Out, "Mirrored to: %s\n", o.To)
+		toList = append(toList, o.To)
+	}
+	if len(o.ToRelease) > 0 {
+		toList = append(toList, o.ToRelease)
+	}
+	if len(toList) > 0 {
+		for _, t := range toList {
+			if hasPrefix {
+				fmt.Fprintf(o.Out, "Mirror prefix: %s\n", t)
+			} else {
+				fmt.Fprintf(o.Out, "Mirrored to: %s\n", t)
+			}
 		}
 	}
 	if toDisk {
@@ -784,9 +810,9 @@ func (o *MirrorOptions) Run() error {
 		} else {
 			fmt.Fprintf(o.Out, "\nTo upload local images to a registry, run:\n\n    oc image mirror 'file://%s*' REGISTRY/REPOSITORY\n\n", to)
 		}
-	} else if len(o.To) > 0 {
+	} else if len(toList) > 0 {
 		if o.PrintImageContentInstructions {
-			if err := printImageContentInstructions(o.Out, o.From, o.To, o.ReleaseImageSignatureToDir, repositories); err != nil {
+			if err := printImageContentInstructions(o.Out, o.From, toList, o.ReleaseImageSignatureToDir, repositories); err != nil {
 				return fmt.Errorf("Error creating mirror usage instructions: %v", err)
 			}
 		}
@@ -815,47 +841,48 @@ func (o *MirrorOptions) Run() error {
 
 // printImageContentInstructions provides examples to the user for using the new repository mirror
 // https://github.com/openshift/installer/blob/master/docs/dev/alternative_release_image_sources.md
-func printImageContentInstructions(out io.Writer, from, to string, signatureToDir string, repositories map[string]struct{}) error {
+func printImageContentInstructions(out io.Writer, from string, toList []string, signatureToDir string, repositories map[string]struct{}) error {
 	type installConfigSubsection struct {
 		ImageContentSources []operatorv1alpha1.RepositoryDigestMirrors `json:"imageContentSources"`
 	}
 
 	var sources []operatorv1alpha1.RepositoryDigestMirrors
 
-	mirrorRef, err := imagesource.ParseReference(to)
-	if err != nil {
-		return fmt.Errorf("Unable to parse image reference '%s': %v", to, err)
-	}
-	if mirrorRef.Type != imagesource.DestinationRegistry {
-		return nil
-	}
-	mirrorRepo := mirrorRef.Ref.AsRepository().String()
-
-	if len(from) != 0 {
-		sourceRef, err := imagesource.ParseReference(from)
+	for _, to := range toList {
+		mirrorRef, err := imagesource.ParseReference(to)
 		if err != nil {
-			return fmt.Errorf("Unable to parse image reference '%s': %v", from, err)
+			return fmt.Errorf("Unable to parse image reference '%s': %v", to, err)
 		}
-		if sourceRef.Type != imagesource.DestinationRegistry {
+		if mirrorRef.Type != imagesource.DestinationRegistry {
 			return nil
 		}
-		sourceRepo := sourceRef.Ref.AsRepository().String()
-		repositories[sourceRepo] = struct{}{}
-	}
+		mirrorRepo := mirrorRef.Ref.AsRepository().String()
+		if len(from) != 0 {
+			sourceRef, err := imagesource.ParseReference(from)
+			if err != nil {
+				return fmt.Errorf("Unable to parse image reference '%s': %v", from, err)
+			}
+			if sourceRef.Type != imagesource.DestinationRegistry {
+				return nil
+			}
+			sourceRepo := sourceRef.Ref.AsRepository().String()
+			repositories[sourceRepo] = struct{}{}
+		}
 
-	if len(repositories) == 0 {
-		return nil
-	}
+		if len(repositories) == 0 {
+			return nil
+		}
 
-	for repository := range repositories {
-		sources = append(sources, operatorv1alpha1.RepositoryDigestMirrors{
-			Source:  repository,
-			Mirrors: []string{mirrorRepo},
-		})
+		for repository := range repositories {
+			sources = append(sources, operatorv1alpha1.RepositoryDigestMirrors{
+				Source:  repository,
+				Mirrors: []string{mirrorRepo},
+			})
+		}
 	}
-	sort.Slice(sources, func(i, j int) bool {
-		return sources[i].Source < sources[j].Source
-	})
+	// de-duplicate sources
+	uniqueSources := dedupeSortSources(sources)
+	sources = uniqueSources
 
 	// Create and display install-config.yaml example
 	imageContentSources := installConfigSubsection{
@@ -917,4 +944,40 @@ func (o *MirrorOptions) HTTPClient() (*http.Client, error) {
 	return &http.Client{
 		Transport: transport,
 	}, nil
+}
+
+func dedupeSortSources(sources []operatorv1alpha1.RepositoryDigestMirrors) []operatorv1alpha1.RepositoryDigestMirrors {
+	unique := make(map[string][]string)
+	var uniqueSources []operatorv1alpha1.RepositoryDigestMirrors
+	for _, s := range sources {
+		if mirrors, ok := unique[s.Source]; ok {
+			for _, m := range s.Mirrors {
+				if !contains(mirrors, m) {
+					mirrors = append(mirrors, m)
+				}
+			}
+			unique[s.Source] = mirrors
+		} else {
+			unique[s.Source] = s.Mirrors
+		}
+	}
+	for s, m := range unique {
+		uniqueSources = append(uniqueSources, operatorv1alpha1.RepositoryDigestMirrors{
+			Source:  s,
+			Mirrors: m,
+		})
+	}
+	sort.Slice(uniqueSources, func(i, j int) bool {
+		return uniqueSources[i].Source < sources[j].Source
+	})
+	return uniqueSources
+}
+
+func contains(s []string, str string) bool {
+	for _, v := range s {
+		if v == str {
+			return true
+		}
+	}
+	return false
 }

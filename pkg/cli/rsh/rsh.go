@@ -24,7 +24,7 @@ var (
 	rshUsageErrStr = fmt.Sprintf("expected '%s'.\nPOD or TYPE/NAME is a required argument for the rsh command", rshUsageStr)
 
 	rshLong = templates.LongDesc(`
-		Open a remote shell session to a container
+		Open a remote shell session to a container.
 
 		This command will attempt to start a shell session in a pod for the specified resource.
 		It works with pods, deployment configs, deployments, jobs, daemon sets, replication controllers
@@ -65,7 +65,6 @@ type RshOptions struct {
 	ForceTTY   bool
 	DisableTTY bool
 	Executable string
-	Timeout    int
 	*exec.ExecOptions
 }
 
@@ -73,7 +72,6 @@ func NewRshOptions(streams genericclioptions.IOStreams) *RshOptions {
 	return &RshOptions{
 		ForceTTY:   false,
 		DisableTTY: false,
-		Timeout:    10,
 		Executable: DefaultShell,
 		ExecOptions: &exec.ExecOptions{
 			StreamOptions: exec.StreamOptions{
@@ -82,8 +80,7 @@ func NewRshOptions(streams genericclioptions.IOStreams) *RshOptions {
 				Stdin:     true,
 			},
 
-			ParentCommandName: "oc",
-			Executor:          &exec.DefaultRemoteExecutor{},
+			Executor: &exec.DefaultRemoteExecutor{},
 		},
 	}
 }
@@ -94,7 +91,7 @@ func NewCmdRsh(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.C
 	cmd := &cobra.Command{
 		Use:                   rshUsageStr,
 		DisableFlagsInUseLine: true,
-		Short:                 "Start a shell session in a container.",
+		Short:                 "Start a shell session in a container",
 		Long:                  rshLong,
 		Example:               rshExample,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -108,8 +105,6 @@ func NewCmdRsh(f kcmdutil.Factory, streams genericclioptions.IOStreams) *cobra.C
 	cmd.Flags().BoolVarP(&o.ForceTTY, "tty", "t", o.ForceTTY, "Force a pseudo-terminal to be allocated")
 	cmd.Flags().BoolVarP(&o.DisableTTY, "no-tty", "T", o.DisableTTY, "Disable pseudo-terminal allocation")
 	cmd.Flags().StringVar(&o.Executable, "shell", o.Executable, "Path to the shell command")
-	cmd.Flags().IntVar(&o.Timeout, "timeout", o.Timeout, "Request timeout for obtaining a pod from the server; defaults to 10 seconds")
-	cmd.Flags().MarkDeprecated("timeout", "use --request-timeout, instead.")
 	cmd.Flags().StringVarP(&o.ContainerName, "container", "c", o.ContainerName, "Container name; defaults to first container")
 	// For consistencty with rsh API (https://linux.die.net/man/1/rsh) we don't
 	// allow '--' and we need this flag enabled explicitly, otherwise two things
@@ -171,13 +166,6 @@ func (o *RshOptions) Complete(f kcmdutil.Factory, cmd *cobra.Command, args []str
 	} else {
 		o.Command = []string{o.Executable}
 	}
-
-	fullCmdName := ""
-	cmdParent := cmd.Parent()
-	if cmdParent != nil {
-		fullCmdName = cmdParent.CommandPath()
-	}
-	o.EnableSuggestedCmdUsage = len(fullCmdName) > 0 && kcmdutil.IsSiblingCommandExists(cmd, "describe")
 
 	return nil
 }
